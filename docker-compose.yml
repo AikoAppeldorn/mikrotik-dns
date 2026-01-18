@@ -2,7 +2,7 @@ services:
   mikrotik-dns:
     container_name: mikrotik-dns
     restart: unless-stopped
-    build: .
+    image: ghcr.io/aikoappeldorn/mikrotik-dns:latest
     ports:
       - "3000:3000"
       - "5354:5354/udp"
