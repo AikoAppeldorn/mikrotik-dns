@@ -18,7 +18,8 @@ jobs:
 
       - name: Set lowercase image name
         id: lowercase
-        run: echo "image=${{ env.REGISTRY }}/${{ github.repository | lower }}" >> $GITHUB_OUTPUT
+        shell: bash
+        run: echo "image=${{ env.REGISTRY }}/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
       - uses: docker/setup-buildx-action@v3
 
