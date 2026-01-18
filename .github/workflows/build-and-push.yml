@@ -6,7 +6,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
@@ -16,6 +15,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        id: lowercase
+        run: echo "image=${{ env.REGISTRY }}/${{ github.repository | lower }}" >> $GITHUB_OUTPUT
 
       - uses: docker/setup-buildx-action@v3
 
@@ -29,4 +32,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: ${{ steps.lowercase.outputs.image }}:latest
