@@ -35,6 +35,7 @@ import {
   Zap,
   Network,
   BarChart3,
+  Ban,
 } from "lucide-react";
 import { AnimatedNumber } from "@/components/animated-number";
 import { DarkModeSwitch } from "@/components/dark-mode-switch";
@@ -87,6 +88,11 @@ interface DomainWithResolution {
   resolution: DNSResolution;
 }
 
+interface DNSServerData {
+  server: string;
+  count: number;
+}
+
 export default function DNSDashboard() {
   const { toast } = useToast();
   const [topDomains, setTopDomains] = useState<DomainData[]>([]);
@@ -115,6 +121,48 @@ export default function DNSDashboard() {
   const [domainClients, setDomainClients] = useState<DomainClient[]>([]);
   const [domainPage, setDomainPage] = useState(1);
   const [activeTab, setActiveTab] = useState("overview");
+  const [dnsServers, setDnsServers] = useState<DNSServerData[]>([]);
+  const [excludedDomains, setExcludedDomains] = useState<Set<string>>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("excludedDomains");
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    }
+    return new Set();
+  });
+
+  // Save excluded domains to localStorage whenever it changes
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(
+        "excludedDomains",
+        JSON.stringify(Array.from(excludedDomains)),
+      );
+    }
+  }, [excludedDomains]);
+
+  const toggleDomainExclusion = (domain: string) => {
+    setExcludedDomains((prev) => {
+      const next = new Set(prev);
+      if (next.has(domain)) {
+        next.delete(domain);
+        toast({
+          title: "Domain included",
+          description: `${domain} will now appear in top domains`,
+        });
+      } else {
+        next.add(domain);
+        toast({
+          title: "Domain excluded",
+          description: `${domain} will be hidden from top domains`,
+        });
+      }
+      return next;
+    });
+  };
+
+  const getFilteredTopDomains = () => {
+    return topDomains.filter((item) => !excludedDomains.has(item.domain));
+  };
 
   const fetchData = async () => {
     const apiUrl = "";
@@ -128,6 +176,7 @@ export default function DNSDashboard() {
         uniqueDomainsRes,
         qpsRes,
         ipvRes,
+        dnsServersRes,
       ] = await Promise.all([
         fetch(`${apiUrl}/api/top-domains`),
         fetch(`${apiUrl}/api/query-types`),
@@ -136,6 +185,7 @@ export default function DNSDashboard() {
         fetch(`${apiUrl}/api/unique-domains-count`),
         fetch(`${apiUrl}/api/queries-per-minute`),
         fetch(`${apiUrl}/api/ipv4-vs-ipv6`),
+        fetch(`${apiUrl}/api/dns-servers`),
       ]);
 
       const domainsData = await domainsRes.json();
@@ -162,6 +212,9 @@ export default function DNSDashboard() {
         ipvData?.find((item: any) => item.ip_type === "IPv6")?.count || 0;
       setIpv4Count(ipv4);
       setIpv6Count(ipv6);
+
+      const dnsServersData = await dnsServersRes.json();
+      setDnsServers(Array.isArray(dnsServersData) ? dnsServersData : []);
 
       setLastUpdated(new Date());
     } catch (error) {
@@ -617,31 +670,41 @@ export default function DNSDashboard() {
                     <Globe className="h-5 w-5 text-green-600" />
                     <CardTitle>Top Domains</CardTitle>
                   </div>
-                  <CardDescription>Most requested domains</CardDescription>
+                  <CardDescription>
+                    Most requested domains
+                    {excludedDomains.size > 0 && (
+                      <span className="text-xs ml-2 text-amber-600 dark:text-amber-400">
+                        ({excludedDomains.size} excluded)
+                      </span>
+                    )}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {topDomains &&
-                      topDomains.slice(0, 8).map((item, index) => {
-                        const maxCount = topDomains[0]?.count || 1;
+                    {getFilteredTopDomains()
+                      .slice(0, 8)
+                      .map((item, index) => {
+                        const maxCount = getFilteredTopDomains()[0]?.count || 1;
                         const percentage = (item.count / maxCount) * 100;
                         const isTopThree = index < 3;
 
                         return (
                           <div
                             key={item.domain}
-                            className={`p-4 rounded-xl border transition-all duration-300 hover:shadow-md dark:hover:shadow-lg dark:hover:shadow-slate-900/20 cursor-pointer hover:scale-[1.02] active:scale-[0.98] hover:-translate-y-0.5 ${
+                            className={`p-4 rounded-xl border transition-all duration-300 hover:shadow-md dark:hover:shadow-lg dark:hover:shadow-slate-900/20 ${
                               isTopThree
                                 ? "bg-gradient-to-r from-slate-50 via-blue-50 to-transparent dark:from-slate-800/50 dark:via-blue-900/30 dark:to-transparent border-blue-200/60 dark:border-blue-700/50 shadow-sm hover:shadow-lg hover:shadow-blue-100/50 dark:hover:shadow-blue-900/20"
                                 : "border-border hover:border-border/60 dark:hover:border-slate-600/50 bg-card hover:bg-accent/30"
                             }`}
-                            onClick={() => {
-                              setSelectedDomain(item.domain);
-                              setActiveTab("domains");
-                            }}
                           >
                             <div className="flex items-center justify-between mb-3">
-                              <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <div 
+                                className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer"
+                                onClick={() => {
+                                  setSelectedDomain(item.domain);
+                                  setActiveTab("domains");
+                                }}
+                              >
                                 <span
                                   className={`text-xs font-bold w-8 h-8 rounded-lg flex items-center justify-center shadow-sm flex-shrink-0 ${
                                     isTopThree
@@ -660,16 +723,30 @@ export default function DNSDashboard() {
                                   </span>
                                 </div>
                               </div>
-                              <Badge
-                                variant={isTopThree ? "default" : "secondary"}
-                                className={`text-xs font-medium ml-2 flex-shrink-0 ${
-                                  isTopThree
-                                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
-                                    : ""
-                                }`}
-                              >
-                                {item.count.toLocaleString()}
-                              </Badge>
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  variant={isTopThree ? "default" : "secondary"}
+                                  className={`text-xs font-medium flex-shrink-0 ${
+                                    isTopThree
+                                      ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+                                      : ""
+                                  }`}
+                                >
+                                  {item.count.toLocaleString()}
+                                </Badge>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0 hover:bg-red-100 dark:hover:bg-red-900/30"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleDomainExclusion(item.domain);
+                                  }}
+                                  title="Exclude from top domains"
+                                >
+                                  <Ban className="h-3.5 w-3.5 text-red-500" />
+                                </Button>
+                              </div>
                             </div>
                             <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2 overflow-hidden">
                               <div
@@ -871,10 +948,122 @@ export default function DNSDashboard() {
                   </div>
                 </CardContent>
               </Card>
+
+              {/* DNS Servers */}
+              <Card className="col-span-1">
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <Network className="h-5 w-5 text-cyan-600" />
+                    <CardTitle>DNS Servers</CardTitle>
+                  </div>
+                  <CardDescription>Servers responding to queries</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {dnsServers && dnsServers.length > 0 ? (
+                      dnsServers.slice(0, 8).map((item, index) => {
+                        const maxCount = dnsServers[0]?.count || 1;
+                        const percentage = (item.count / maxCount) * 100;
+                        const isTopServer = index < 3;
+
+                        return (
+                          <div
+                            key={item.server}
+                            className={`p-4 rounded-xl border transition-all duration-300 hover:shadow-md dark:hover:shadow-lg dark:hover:shadow-slate-900/20 ${
+                              isTopServer
+                                ? "bg-gradient-to-r from-slate-50 via-cyan-50 to-transparent dark:from-slate-800/50 dark:via-cyan-900/30 dark:to-transparent border-cyan-200/60 dark:border-cyan-700/50 shadow-sm hover:shadow-lg hover:shadow-cyan-100/50 dark:hover:shadow-cyan-900/20"
+                                : "border-border hover:border-border/60 dark:hover:border-slate-600/50 bg-card hover:bg-accent/30"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-3 min-w-0 flex-1">
+                                <span
+                                  className={`text-xs font-bold w-8 h-8 rounded-lg flex items-center justify-center shadow-sm flex-shrink-0 ${
+                                    isTopServer
+                                      ? "bg-gradient-to-br from-cyan-500 to-blue-600 dark:from-cyan-400 dark:to-blue-500 text-white"
+                                      : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                                  }`}
+                                >
+                                  {index + 1}
+                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <span
+                                    className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate block font-mono"
+                                    title={item.server}
+                                  >
+                                    {item.server}
+                                  </span>
+                                </div>
+                              </div>
+                              <Badge
+                                variant={isTopServer ? "default" : "secondary"}
+                                className={`text-xs font-medium ml-2 flex-shrink-0 ${
+                                  isTopServer
+                                    ? "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300"
+                                    : ""
+                                }`}
+                              >
+                                {item.count.toLocaleString()}
+                              </Badge>
+                            </div>
+                            <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2 overflow-hidden">
+                              <div
+                                className={`h-2 rounded-full transition-all duration-700 ${
+                                  isTopServer
+                                    ? "bg-gradient-to-r from-cyan-500 to-blue-600 dark:from-cyan-400 dark:to-blue-500"
+                                    : "bg-slate-400 dark:bg-slate-500"
+                                }`}
+                                style={{ width: `${percentage}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="text-center py-8 text-slate-500 dark:text-slate-400">
+                        <Network className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                        <p className="text-sm">No DNS server data available</p>
+                        <p className="text-xs mt-1">Data will appear when queries are resolved</p>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
             </div>
           </TabsContent>
 
           <TabsContent value="domains" className="space-y-6">
+            {excludedDomains.size > 0 && (
+              <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/10">
+                <CardHeader>
+                  <CardTitle className="text-amber-900 dark:text-amber-100 flex items-center gap-2">
+                    <Ban className="h-5 w-5" />
+                    Excluded Domains ({excludedDomains.size})
+                  </CardTitle>
+                  <CardDescription>
+                    These domains are hidden from top domains display
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-wrap gap-2">
+                    {Array.from(excludedDomains).map((domain) => (
+                      <Badge
+                        key={domain}
+                        variant="secondary"
+                        className="px-3 py-1.5 text-sm cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors group"
+                        onClick={() => toggleDomainExclusion(domain)}
+                      >
+                        <span className="font-mono">{domain}</span>
+                        <span className="ml-2 text-xs opacity-60 group-hover:opacity-100">
+                          ✕
+                        </span>
+                      </Badge>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <Card>
                 <CardHeader>
@@ -885,40 +1074,71 @@ export default function DNSDashboard() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-2">
-                    {topDomains.map((item, index) => (
-                      <div
-                        key={item.domain}
-                        className={`flex items-center justify-between p-4 border rounded-xl cursor-pointer transition-all duration-300 hover:shadow-md dark:hover:shadow-lg dark:hover:shadow-slate-900/20 ${
-                          selectedDomain === item.domain
-                            ? "bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-700/50 shadow-sm"
-                            : "border-border hover:border-border/60 dark:hover:border-slate-600/50 bg-card hover:bg-accent/30"
-                        }`}
-                        onClick={() => setSelectedDomain(item.domain)}
-                      >
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <span className="text-sm font-mono text-slate-500 dark:text-slate-400 w-8 flex-shrink-0">
-                            #{index + 1}
-                          </span>
-                          <span
-                            className="font-semibold truncate text-slate-900 dark:text-slate-100"
-                            title={item.domain}
+                    {topDomains.map((item, index) => {
+                      const isExcluded = excludedDomains.has(item.domain);
+                      return (
+                        <div
+                          key={item.domain}
+                          className={`flex items-center justify-between p-4 border rounded-xl transition-all duration-300 ${
+                            isExcluded
+                              ? "opacity-50 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700"
+                              : selectedDomain === item.domain
+                              ? "bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-700/50 shadow-sm cursor-pointer hover:shadow-md dark:hover:shadow-lg dark:hover:shadow-slate-900/20"
+                              : "border-border hover:border-border/60 dark:hover:border-slate-600/50 bg-card hover:bg-accent/30 cursor-pointer hover:shadow-md dark:hover:shadow-lg dark:hover:shadow-slate-900/20"
+                          }`}
+                        >
+                          <div 
+                            className="flex items-center gap-3 min-w-0 flex-1"
+                            onClick={() => !isExcluded && setSelectedDomain(item.domain)}
                           >
-                            {item.domain}
-                          </span>
+                            <span className="text-sm font-mono text-slate-500 dark:text-slate-400 w-8 flex-shrink-0">
+                              #{index + 1}
+                            </span>
+                            <span
+                              className={`font-semibold truncate ${
+                                isExcluded
+                                  ? "line-through text-slate-500 dark:text-slate-500"
+                                  : "text-slate-900 dark:text-slate-100"
+                              }`}
+                              title={item.domain}
+                            >
+                              {item.domain}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+                            <Badge
+                              variant={
+                                selectedDomain === item.domain && !isExcluded
+                                  ? "default"
+                                  : "outline"
+                              }
+                            >
+                              {item.count} queries
+                            </Badge>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={`h-8 w-8 p-0 ${
+                                isExcluded
+                                  ? "hover:bg-green-100 dark:hover:bg-green-900/30"
+                                  : "hover:bg-red-100 dark:hover:bg-red-900/30"
+                              }`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleDomainExclusion(item.domain);
+                              }}
+                              title={isExcluded ? "Include domain" : "Exclude domain"}
+                            >
+                              {isExcluded ? (
+                                <span className="text-green-600 dark:text-green-400 text-lg">✓</span>
+                              ) : (
+                                <Ban className="h-4 w-4 text-red-500" />
+                              )}
+                            </Button>
+                          </div>
                         </div>
-                        <div className="text-right flex-shrink-0 ml-3">
-                          <Badge
-                            variant={
-                              selectedDomain === item.domain
-                                ? "default"
-                                : "outline"
-                            }
-                          >
-                            {item.count} queries
-                          </Badge>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>

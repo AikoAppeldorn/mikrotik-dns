@@ -18,6 +18,7 @@ import (
 )
 
 var lineRE = regexp.MustCompile(`^(?:(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) )?dns query from (.+?): #[0-9]+ ([^ ]+)\. (\w+(?: \(\d+\))?)$`)
+var lineANS = regexp.MustCompile(`--- got answer from ([0-9a-fA-F:.]+?):\d+:$`)
 
 func prepareDB(db *sql.DB) {
 	db.Exec(`PRAGMA journal_mode = WAL`)
@@ -27,6 +28,11 @@ func prepareDB(db *sql.DB) {
         client TEXT,
         domain TEXT,
         type TEXT
+    )`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS answers(
+        id INTEGER PRIMARY KEY,
+        timestamp INTEGER,
+        server TEXT
     )`)
 }
 
@@ -39,10 +45,19 @@ func purgeOld(db *sql.DB) {
 
 func handleLine(db *sql.DB, line string) {
 	m := lineRE.FindStringSubmatch(line)
-	if m == nil {
-		log.Printf("Unparsed line: %s", line)
+	if m != nil {
+		handleQuery(db, m)
 		return
 	}
+	m = lineANS.FindStringSubmatch(line)
+	if m != nil {
+		handleAnswer(db, m)
+		return
+	}
+	log.Printf("Unparsed line: %s", line)
+}
+
+func handleQuery(db *sql.DB, m []string) {
 	tsStr := m[1]
 	var ts time.Time
 	if tsStr != "" {
@@ -61,17 +76,29 @@ func handleLine(db *sql.DB, line string) {
 	if qtypeRaw == "" {
 		qtypeRaw = "UNKNOWN"
 	} else if strings.HasPrefix(qtypeRaw, "UNKNOWN") {
-		qtypeRaw = resolveUnknownType(line)
+		qtypeRaw = resolveUnknownType(qtypeRaw)
 	}
 
 	if strings.HasPrefix(qtypeRaw, "UNKNOWN") {
-		log.Printf("Unknown type: [%s]", line)
+		log.Printf("Unknown type: [%s]", qtypeRaw)
 	}
 	if _, err := db.Exec(`INSERT INTO queries(timestamp, client, domain, type) VALUES(?,?,?,?)`,
 		ts.Unix(), client, domain, qtypeRaw); err != nil {
 		log.Printf("DB insert error: %v", err)
 	} else {
 		log.Printf("Logged query: %s %s %s", client, domain, qtypeRaw)
+	}
+}
+
+func handleAnswer(db *sql.DB, m []string) {
+	server := m[1]
+	ts := time.Now()
+
+	if _, err := db.Exec(`INSERT INTO answers(timestamp, server) VALUES(?,?)`,
+		ts.Unix(), server); err != nil {
+		log.Printf("DB insert error: %v", err)
+	} else {
+		log.Printf("Logged answer from: %s", server)
 	}
 }
 
@@ -406,6 +433,36 @@ func serveAPI(db *sql.DB) {
 				IPType string `json:"ip_type"`
 				Count  int    `json:"count"`
 			}{ipType, count})
+		}
+		json.NewEncoder(w).Encode(out)
+	})
+
+	mux.HandleFunc("/api/dns-servers", func(w http.ResponseWriter, r *http.Request) {
+		rows, err := db.Query(`
+			SELECT server, COUNT(*) as count
+			FROM answers
+			WHERE timestamp >= strftime('%s','now')-86400
+			GROUP BY server
+			ORDER BY count DESC
+		`)
+		if err != nil {
+			http.Error(w, "DB error", http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		var out []struct {
+			Server string `json:"server"`
+			Count  int    `json:"count"`
+		}
+		for rows.Next() {
+			var server string
+			var count int
+			rows.Scan(&server, &count)
+			out = append(out, struct {
+				Server string `json:"server"`
+				Count  int    `json:"count"`
+			}{server, count})
 		}
 		json.NewEncoder(w).Encode(out)
 	})
